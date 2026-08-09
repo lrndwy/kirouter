@@ -1,8 +1,8 @@
 # kirouter
 
-[![npm version](https://img.shields.io/npm/v/@lrndwy/kirouter.svg)](https://www.npmjs.com/package/@lrndwy/kirouter)
-[![license](https://img.shields.io/npm/l/@lrndwy/kirouter.svg)](./LICENSE)
-[![node](https://img.shields.io/node/v/@lrndwy/kirouter.svg)](https://nodejs.org)
+[![npm version](https://img.shields.io/npm/v/@lrnd/kirouter.svg)](https://www.npmjs.com/package/@lrnd/kirouter)
+[![license](https://img.shields.io/npm/l/@lrnd/kirouter.svg)](./LICENSE)
+[![node](https://img.shields.io/node/v/@lrnd/kirouter.svg)](https://nodejs.org)
 
 CLI proxy lokal **Kiro-only** (mirip 9router, tanpa multi-provider).
 
@@ -15,13 +15,13 @@ CLI proxy lokal **Kiro-only** (mirip 9router, tanpa multi-provider).
 Dari npm (disarankan):
 
 ```bash
-npm install -g @lrndwy/kirouter
+npm install -g @lrnd/kirouter
 ```
 
 Perintah CLI tetap `kirouter`. Atau sekali jalan tanpa install:
 
 ```bash
-npx @lrndwy/kirouter
+npx @lrnd/kirouter
 ```
 
 Dari source:

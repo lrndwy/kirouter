@@ -1,5 +1,5 @@
 {
-  "name": "@lrndwy/kirouter",
+  "name": "@lrnd/kirouter",
   "version": "0.1.0",
   "description": "Minimal Kiro-only OpenAI/Claude-compatible local proxy CLI",
   "type": "module",
