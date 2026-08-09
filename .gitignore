@@ -29,8 +29,9 @@ kiro_keys.txt
 .remember/
 .codegraph/
 
-# npm pack artifacts
+# npm pack artifacts / local auth
 *.tgz
+.npmrc
 
 # Coverage / test
 coverage/
