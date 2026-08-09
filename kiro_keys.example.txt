@@ -1,0 +1,4 @@
+# Format: email|refreshToken
+# Copy to kiro_keys.txt (gitignored) or ~/.kirouter/kiro_keys.txt
+#
+# user@example.com|aorAAAAAG...:MGQC...

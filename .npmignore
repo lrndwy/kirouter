@@ -1,0 +1,20 @@
+# Keep published tarball lean; package.json "files" is the primary allowlist.
+.*
+!bin/
+!src/
+!README.md
+!LICENSE
+!package.json
+
+# Secrets / local
+kiro_keys.txt
+*.keys.txt
+.env
+.env.*
+.remember/
+.codegraph/
+.kirouter/
+*.tgz
+*.log
+node_modules/
+coverage/

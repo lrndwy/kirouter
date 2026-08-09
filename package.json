@@ -1,0 +1,47 @@
+{
+  "name": "kirouter",
+  "version": "0.1.0",
+  "description": "Minimal Kiro-only OpenAI/Claude-compatible local proxy CLI",
+  "type": "module",
+  "bin": {
+    "kirouter": "./bin/kirouter.js"
+  },
+  "files": [
+    "bin",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node bin/kirouter.js start",
+    "check": "node --check bin/kirouter.js && node --check src/cli.js && node --check src/server.js && node --check src/tui/menu.js && node --check src/tui/live.js && node --check src/util/ui.js && node --check src/kiro/usage.js && node --check src/store/stats.js && node src/check.js",
+    "prepublishOnly": "npm run check",
+    "pack:dry": "npm pack --dry-run"
+  },
+  "keywords": [
+    "kiro",
+    "proxy",
+    "openai",
+    "claude",
+    "cli",
+    "anthropic",
+    "cowork"
+  ],
+  "author": "lrndwy",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/decolua/kirouter.git"
+  },
+  "bugs": {
+    "url": "https://github.com/decolua/kirouter/issues"
+  },
+  "homepage": "https://github.com/decolua/kirouter#readme",
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}
