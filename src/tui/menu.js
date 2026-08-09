@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { choose, pause, pickModel, pickSubagentModel, prompt, toolSupportsSubagent } from "../util/input.js";
+import { choose, confirm, pause, pickModel, pickSubagentModel, prompt, toolSupportsSubagent } from "../util/input.js";
+import { withSpinner } from "../util/spinner.js";
 import { getBaseUrl, getDefaultModel, loadConfig, saveConfig } from "../store/config.js";
 import { clearCredentials, isLoggedIn, loadCredentials, saveCredentials } from "../store/credentials.js";
 import {
@@ -160,9 +161,17 @@ async function toolsFlow() {
     if (toolSupportsSubagent(id)) {
       subagentModel = await pickSubagentModel(id, model);
     }
+    if (!(await confirm(`Apply ${id} → ${model}?`, true))) {
+      warn("Cancelled");
+      await pause();
+      return;
+    }
     saveConfig({ defaultModel: model });
-    const result = await applyTool(id, { model, subagentModel });
-    ok(`Applied ${id} → ${c.bold(model)}`);
+    const result = await withSpinner(
+      `Applying ${id}…`,
+      () => applyTool(id, { model, subagentModel }),
+      { success: `Applied ${id} → ${model}` }
+    );
     if (result.subagentModel || subagentModel) kv("Subagent", result.subagentModel || subagentModel);
     if (result.settingsPath) kv("Config", result.settingsPath);
     if (result.model && result.model !== model) kv("Client model", result.model);
@@ -235,16 +244,11 @@ async function accountsFlow() {
       },
     ]);
     console.log();
-    info(`Fetching usage for all ${statuses.length} account(s)…`);
-    const result = await fetchAllAccountsUsage({
-      onProgress: (row, i, total) => {
-        const mark = row.ok ? c.green("✔") : c.red("✖");
-        process.stdout.write(
-          `\r  ${mark} ${String(i).padStart(3)}/${total}  ${row.email.padEnd(28)} ${row.ok ? row.credit : "fail"}   `
-        );
-      },
-    });
-    console.log();
+    const result = await withSpinner(`Fetching usage (${statuses.length} accounts)…`, async (update) =>
+      fetchAllAccountsUsage({
+        onProgress: (row, i, total) => update(`Fetching ${i}/${total}  ${row.email}`),
+      })
+    );
     console.log();
     printAccountsUsageTable(result.rows);
   }
@@ -276,8 +280,7 @@ async function usageFlow() {
     "Skip to Kiro quota",
   ]);
   if (detail?.startsWith("Clear")) {
-    const conf = (await prompt("Type CLEAR to wipe: ")).trim();
-    if (conf === "CLEAR") {
+    if (await confirm("Wipe local token history?", false)) {
       clearStats();
       ok("Local stats cleared");
     } else warn("Cancelled");
@@ -290,22 +293,16 @@ async function usageFlow() {
   console.log();
   const accounts = loadAccountsFromFile();
   if (accounts.length) {
-    info(`Fetching usage for all ${accounts.length} account(s)…`);
-    const result = await fetchAllAccountsUsage({
-      onProgress: (row, i, total) => {
-        const mark = row.ok ? c.green("✔") : c.red("✖");
-        process.stdout.write(
-          `\r  ${mark} ${String(i).padStart(3)}/${total}  ${row.email.padEnd(28)} ${row.ok ? row.credit : "fail"}   `
-        );
-      },
-    });
-    console.log();
+    const result = await withSpinner(`Fetching usage (${accounts.length} accounts)…`, async (update) =>
+      fetchAllAccountsUsage({
+        onProgress: (row, i, total) => update(`Fetching ${i}/${total}  ${row.email}`),
+      })
+    );
     console.log();
     printAccountsUsageTable(result.rows);
   } else {
     try {
-      info("Fetching Kiro usage…");
-      const usage = await fetchKiroUsage();
+      const usage = await withSpinner("Fetching Kiro usage…", () => fetchKiroUsage());
       printUsageBlock(usage);
     } catch (e) {
       warn(e.message || String(e));

@@ -1,3 +1,5 @@
+import { finalizeUsage, toClaudeUsage, toOpenAIUsage } from "../util/tokens.js";
+
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -84,10 +86,13 @@ function normalizeStopReason(reason) {
 /**
  * Transform Kiro AWS EventStream response into OpenAI chat.completion SSE.
  * Minimal path: no integrity gate / repair.
- * options.onComplete({ usage, contextUsagePercentage }) when stream ends.
+ * options: { onComplete, contextWindow, estimatedInput }
+ * onComplete({ usage, contextUsagePercentage, maxContext }) when stream ends.
  */
 export function transformEventStreamToOpenAI(response, model, options = {}) {
   const onComplete = options.onComplete;
+  const contextWindow = options.contextWindow || 0;
+  const estimatedInput = options.estimatedInput || 0;
   const responseId = `chatcmpl-${Date.now()}`;
   const created = Math.floor(Date.now() / 1000);
   const state = {
@@ -100,6 +105,8 @@ export function transformEventStreamToOpenAI(response, model, options = {}) {
     finished: false,
     usage: null,
     contextUsagePercentage: null,
+    hasMetering: false,
+    totalContentLength: 0,
   };
 
   const sseChunk = (delta, finishReason = null, usage) =>
@@ -115,10 +122,24 @@ export function transformEventStreamToOpenAI(response, model, options = {}) {
     );
 
   const emitDelta = (controller, delta) => {
+    if (typeof delta.content === "string") state.totalContentLength += delta.content.length;
+    if (typeof delta.reasoning_content === "string") {
+      state.totalContentLength += delta.reasoning_content.length;
+    }
     if (state.chunkIndex === 0) delta = { role: "assistant", ...delta };
     state.chunkIndex++;
     controller.enqueue(sseChunk(delta));
   };
+
+  const buildFinalUsage = () =>
+    finalizeUsage({
+      usage: state.usage,
+      contextUsagePercentage: state.contextUsagePercentage,
+      contextWindow,
+      estimatedInput,
+      outputChars: state.totalContentLength,
+      hasMetering: state.hasMetering,
+    });
 
   const emitTools = (controller) => {
     for (const tool of state.tools.values()) {
@@ -186,9 +207,15 @@ export function transformEventStreamToOpenAI(response, model, options = {}) {
           tool.inputKind = "string";
           tool.inputChunks ||= [];
           tool.inputChunks.push(value.input);
+          state.totalContentLength += value.input.length;
         } else if (value.input && typeof value.input === "object") {
           tool.inputKind = "object";
           tool.inputObject = value.input;
+          try {
+            state.totalContentLength += JSON.stringify(value.input).length;
+          } catch {
+            /* ignore */
+          }
         }
       }
     } else if (eventType === "messageStopEvent") {
@@ -198,25 +225,18 @@ export function transformEventStreamToOpenAI(response, model, options = {}) {
       state.stopReason =
         normalizeStopReason(metadata?.stopReason ?? metadata?.stop_reason) || state.stopReason;
     } else if (eventType === "contextUsageEvent") {
-      const percentage = Number(event.payload?.contextUsagePercentage);
+      const percentage = Number(
+        event.payload?.contextUsagePercentage ?? event.payload?.context_usage_percentage
+      );
       if (Number.isFinite(percentage)) state.contextUsagePercentage = percentage;
     } else if (eventType === "metricsEvent") {
       const metrics = event.payload?.metricsEvent || event.payload || {};
-      const prompt = Number(metrics.inputTokens) || 0;
-      const completion = Number(metrics.outputTokens) || 0;
-      if (prompt || completion) {
-        state.usage = {
-          prompt_tokens: prompt,
-          completion_tokens: completion,
-          total_tokens: prompt + completion,
-        };
-        const cacheRead = Number(metrics.cacheReadInputTokens || metrics.cache_read_input_tokens) || 0;
-        const cacheCreate =
-          Number(metrics.cacheCreationInputTokens || metrics.cache_creation_input_tokens) || 0;
-        if (cacheRead) state.usage.cache_read_input_tokens = cacheRead;
-        if (cacheCreate) state.usage.cache_creation_input_tokens = cacheCreate;
+      const parsed = toOpenAIUsage(metrics);
+      if (parsed.prompt_tokens || parsed.completion_tokens) {
+        state.usage = { ...(state.usage || {}), ...parsed };
       }
     } else if (eventType === "meteringEvent") {
+      state.hasMetering = true;
       const metering = event.payload?.meteringEvent || event.payload || {};
       const credits = Number(metering.usage);
       if (Number.isFinite(credits)) {
@@ -226,10 +246,14 @@ export function transformEventStreamToOpenAI(response, model, options = {}) {
     return true;
   };
 
-  const finishMeta = () => ({
-    usage: state.usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-    contextUsagePercentage: state.contextUsagePercentage,
-  });
+  const finishMeta = () => {
+    const usage = buildFinalUsage();
+    return {
+      usage,
+      contextUsagePercentage: state.contextUsagePercentage,
+      maxContext: contextWindow || undefined,
+    };
+  };
 
   const processBytes = (chunk, controller) => {
     const combinedLength = state.buffer.byteLength + chunk.byteLength;
@@ -289,7 +313,10 @@ export function transformEventStreamToOpenAI(response, model, options = {}) {
             : state.stopReason === "max_tokens"
               ? "length"
               : "stop";
-          controller.enqueue(sseChunk({}, finishReason, state.usage || undefined));
+          // Always attach usage on the final chunk so OpenCode / AI SDK can detect tokens.
+          const usage = buildFinalUsage();
+          state.usage = usage;
+          controller.enqueue(sseChunk({}, finishReason, usage));
           controller.enqueue(encoder.encode("data: [DONE]\n\n"));
         }
         try {
@@ -371,10 +398,13 @@ function finalizeClaudeToolInput(tool) {
 
 /**
  * Transform EventStream into Anthropic Messages SSE.
- * options.onComplete({ usage, contextUsagePercentage })
+ * options: { onComplete, contextWindow, estimatedInput }
+ * Claude Code / Cowork read usage from message_start + message_delta.
  */
 export function transformEventStreamToClaude(response, model, options = {}) {
   const onComplete = options.onComplete;
+  const contextWindow = options.contextWindow || 0;
+  const estimatedInput = options.estimatedInput || 0;
   const messageId = `msg_${Date.now()}`;
   let blockIndex = 0;
   let textStarted = false;
@@ -385,6 +415,8 @@ export function transformEventStreamToClaude(response, model, options = {}) {
   let finished = false;
   let usage = null;
   let contextUsagePercentage = null;
+  let hasMetering = false;
+  let totalContentLength = 0;
 
   const write = (controller, event, data) => {
     controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
@@ -395,6 +427,16 @@ export function transformEventStreamToClaude(response, model, options = {}) {
     write(controller, "content_block_stop", { type: "content_block_stop", index: textBlockIndex });
     textStarted = false;
   };
+
+  const buildFinalUsage = () =>
+    finalizeUsage({
+      usage,
+      contextUsagePercentage,
+      contextWindow,
+      estimatedInput,
+      outputChars: totalContentLength,
+      hasMetering,
+    });
 
   const processEvent = (event, controller) => {
     const messageType = event.headers[":message-type"];
@@ -418,6 +460,7 @@ export function transformEventStreamToClaude(response, model, options = {}) {
         blockIndex++;
         textStarted = true;
       }
+      totalContentLength += event.payload.content.length;
       write(controller, "content_block_delta", {
         type: "content_block_delta",
         index: textBlockIndex,
@@ -441,22 +484,34 @@ export function transformEventStreamToClaude(response, model, options = {}) {
         }
         // Buffer only — do NOT stream each fragment (Kiro sends {} then full JSON)
         appendClaudeToolInput(tools.get(id), value.input);
+        if (typeof value.input === "string") totalContentLength += value.input.length;
+        else if (value.input && typeof value.input === "object") {
+          try {
+            totalContentLength += JSON.stringify(value.input).length;
+          } catch {
+            /* ignore */
+          }
+        }
       }
     } else if (eventType === "messageStopEvent" || eventType === "metadataEvent") {
       // handled at finish
     } else if (eventType === "contextUsageEvent") {
-      const percentage = Number(event.payload?.contextUsagePercentage);
+      const percentage = Number(
+        event.payload?.contextUsagePercentage ?? event.payload?.context_usage_percentage
+      );
       if (Number.isFinite(percentage)) contextUsagePercentage = percentage;
     } else if (eventType === "metricsEvent") {
       const metrics = event.payload?.metricsEvent || event.payload || {};
-      const prompt = Number(metrics.inputTokens) || 0;
-      const completion = Number(metrics.outputTokens) || 0;
-      if (prompt || completion) {
-        usage = {
-          prompt_tokens: prompt,
-          completion_tokens: completion,
-          total_tokens: prompt + completion,
-        };
+      const parsed = toOpenAIUsage(metrics);
+      if (parsed.prompt_tokens || parsed.completion_tokens) {
+        usage = { ...(usage || {}), ...parsed };
+      }
+    } else if (eventType === "meteringEvent") {
+      hasMetering = true;
+      const metering = event.payload?.meteringEvent || event.payload || {};
+      const credits = Number(metering.usage);
+      if (Number.isFinite(credits)) {
+        usage = { ...(usage || {}), kiro_credits: credits };
       }
     }
     return true;
@@ -472,6 +527,7 @@ export function transformEventStreamToClaude(response, model, options = {}) {
   const reader = response.body.getReader();
   const stream = new ReadableStream({
     async start(controller) {
+      // Seed input_tokens so Claude Code / Cowork show context immediately.
       write(controller, "message_start", {
         type: "message_start",
         message: {
@@ -482,10 +538,22 @@ export function transformEventStreamToClaude(response, model, options = {}) {
           model,
           stop_reason: null,
           stop_sequence: null,
-          usage: { input_tokens: 0, output_tokens: 0 },
+          usage: { input_tokens: estimatedInput || 0, output_tokens: 0 },
         },
       });
       write(controller, "ping", { type: "ping" });
+
+      const emitComplete = (metaUsage) => {
+        try {
+          onComplete?.({
+            usage: metaUsage,
+            contextUsagePercentage,
+            maxContext: contextWindow || undefined,
+          });
+        } catch {
+          /* ignore */
+        }
+      };
 
       try {
         while (!finished) {
@@ -522,36 +590,23 @@ export function transformEventStreamToClaude(response, model, options = {}) {
         }
 
         const stopReason = tools.size ? "tool_use" : "end_turn";
-        const outTokens = usage?.completion_tokens || 0;
-        const inTokens = usage?.prompt_tokens || 0;
+        const finalUsage = buildFinalUsage();
+        usage = finalUsage;
+        const claudeUsage = toClaudeUsage(finalUsage);
         write(controller, "message_delta", {
           type: "message_delta",
           delta: { stop_reason: stopReason, stop_sequence: null },
-          usage: { output_tokens: outTokens, input_tokens: inTokens },
+          usage: claudeUsage,
         });
         write(controller, "message_stop", { type: "message_stop" });
-        try {
-          onComplete?.({
-            usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-            contextUsagePercentage,
-          });
-        } catch {
-          /* ignore */
-        }
+        emitComplete(finalUsage);
         controller.close();
       } catch (err) {
         write(controller, "error", {
           type: "error",
           error: { type: "api_error", message: err.message || String(err) },
         });
-        try {
-          onComplete?.({
-            usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-            contextUsagePercentage,
-          });
-        } catch {
-          /* ignore */
-        }
+        emitComplete(buildFinalUsage());
         controller.close();
       }
     },
@@ -628,10 +683,11 @@ export async function collectOpenAICompletion(sseResponse, model) {
   }
 
   // Fallback estimate from output text if upstream omitted metrics
-  if (!usage.completion_tokens && content) {
-    usage.completion_tokens = Math.max(1, Math.ceil(content.length / 4));
-    usage.total_tokens = (usage.prompt_tokens || 0) + usage.completion_tokens;
-  }
+  usage = finalizeUsage({
+    usage,
+    estimatedInput: usage.prompt_tokens || 0,
+    outputChars: content.length + reasoning.length,
+  });
 
   const message = { role: "assistant", content: content || null };
   if (reasoning) message.reasoning_content = reasoning;

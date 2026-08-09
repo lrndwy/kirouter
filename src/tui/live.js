@@ -15,7 +15,6 @@ import {
   clearStats,
   getAllPeriodStats,
   getPeriodStats,
-  getRecent,
   getTotals,
   onRequest,
   PERIODS,
@@ -23,29 +22,37 @@ import {
 import { fetchAllAccountsUsage, fetchKiroUsage } from "../kiro/usage.js";
 import { STATIC_MODELS, formatContext } from "../kiro/constants.js";
 import { applyTool, listToolIds, statusAll } from "../cli-tools/index.js";
-import { choose, pickModel, pickSubagentModel, prompt, toolSupportsSubagent } from "../util/input.js";
+import {
+  choose,
+  confirm,
+  pickModel,
+  pickSubagentModel,
+  toolSupportsSubagent,
+} from "../util/input.js";
+import { withSpinner } from "../util/spinner.js";
 import {
   printAccountsUsageTable,
   printLocalStats,
   printPeriodDetail,
   printPeriodStatsTable,
-  printRequestLog,
   printUsageBlock,
 } from "../util/logger.js";
 import {
   accountStateLabel,
   c,
   err,
+  formatAccountsShort,
   hr,
   info,
   kv,
   ok,
   printAccountSummary,
-  printBanner,
+  printBox,
   printTable,
   section,
   warn,
 } from "../util/ui.js";
+import { LiveDashboard } from "./dashboard.js";
 
 function pkgVersion() {
   try {
@@ -66,80 +73,54 @@ function ensureKeysImported() {
   }
 }
 
+function accountsLabel() {
+  if (hasAccounts()) return formatAccountsShort(listAccountStatuses());
+  if (isLoggedIn()) return c.dim("single account");
+  return c.yellow("no accounts");
+}
+
 function printHelpPanel() {
-  console.log();
-  console.log(c.cyan("  ┌─ Help ──────────────────────────────────────────┐"));
-  console.log(c.cyan("  │") + c.bold("  Keyboard shortcuts (proxy live)") + "               " + c.cyan("│"));
-  console.log(c.cyan("  ├─────────────────────────────────────────────────┤"));
   const rows = [
+    ["L", "Toggle scrollable log frame"],
     ["m", "Open central menu"],
     ["h / ?", "Show this help"],
     ["u", "Usage / quota (all accounts)"],
     ["s", "Local token stats (1d…all)"],
-    ["c", "Clear screen"],
+    ["c", "Refresh minimal dashboard"],
     ["a", "Accounts list + usage"],
-    ["l", "Recent request log"],
     ["t", "CLI Tools quick apply"],
     ["q", "Quit / stop proxy"],
   ];
-  for (const [k, desc] of rows) {
-    console.log(
-      c.cyan("  │") +
-        `  ${c.cyan(c.bold(k.padEnd(6)))} ${desc.padEnd(36)}` +
-        c.cyan("│")
-    );
-  }
-  console.log(c.cyan("  └─────────────────────────────────────────────────┘"));
+  const lines = [
+    ` ${c.bold("Keyboard shortcuts")}`,
+    ` ${c.dim("─".repeat(44))}`,
+    ...rows.map(
+      ([k, desc]) => ` ${c.cyan(c.bold(k.padEnd(7)))} ${desc}`
+    ),
+    ` ${c.dim("─".repeat(44))}`,
+    ` ${c.dim("In log frame:")} ${c.cyan("↑↓")} ${c.cyan("PgUp/PgDn")} ${c.cyan("g/G")} ${c.cyan("Esc")}`,
+  ];
   console.log();
-  info("Logs keep streaming while you use shortcuts");
-  console.log();
-}
-
-function printKeyHint() {
-  console.log(
-    c.dim("  keys:") +
-      `  ${c.cyan("m")} menu  ${c.cyan("h")} help  ${c.cyan("u")} usage  ${c.cyan("s")} stats  ${c.cyan("c")} clear  ${c.cyan("a")} accounts  ${c.cyan("l")} recent  ${c.cyan("t")} tools  ${c.cyan("q")} quit`
-  );
+  printBox(lines, { title: "Help", width: 50 });
   console.log();
 }
 
-function printHeader(port, host, cfg) {
-  printBanner(pkgVersion());
-  section("Proxy running");
-  const displayHost = host === "0.0.0.0" ? "localhost" : host;
-  kv("Listen", c.bold(`http://${displayHost}:${port}`));
-  kv("Base URL", getBaseUrl({ ...cfg, port }));
-  kv("API key", cfg.localApiKey);
-  kv("Default model", getDefaultModel(cfg));
-  if (hasAccounts()) {
-    const statuses = listAccountStatuses();
-    printAccountSummary(statuses, keysFilePath());
-  } else if (isLoggedIn()) {
-    kv("Auth", "single account");
-  } else {
-    warn("No accounts — import kiro_keys.txt");
-  }
-  hr();
-  section("Live request log");
-  info("in/out tokens + context appear under each request");
-  printKeyHint();
+function returnToDashboard(dash) {
+  dash.render();
 }
 
-async function showUsage() {
+async function showUsage(dash) {
   console.log();
   const accounts = loadAccountsFromFile();
   if (accounts.length) {
-    info(`Fetching usage for all ${accounts.length} account(s)…`);
     try {
-      const result = await fetchAllAccountsUsage({
-        onProgress: (row, i, total) => {
-          const mark = row.ok ? c.green("✔") : c.red("✖");
-          process.stdout.write(
-            `\r  ${mark} ${String(i).padStart(3)}/${total}  ${row.email.padEnd(28)} ${row.ok ? row.credit : "fail"}   `
-          );
-        },
-      });
-      console.log();
+      const result = await withSpinner(`Fetching usage (${accounts.length} accounts)…`, async (update) =>
+        fetchAllAccountsUsage({
+          onProgress: (row, i, total) => {
+            update(`Fetching ${i}/${total}  ${row.email}`);
+          },
+        })
+      );
       console.log();
       printAccountsUsageTable(result.rows);
     } catch (e) {
@@ -147,25 +128,18 @@ async function showUsage() {
     }
   } else {
     try {
-      info("Fetching Kiro usage…");
-      printUsageBlock(await fetchKiroUsage());
+      const usage = await withSpinner("Fetching Kiro usage…", () => fetchKiroUsage());
+      printUsageBlock(usage);
     } catch (e) {
       err(e.message || e);
     }
   }
-  printKeyHint();
+  console.log();
+  await confirm("Back to dashboard?", true);
+  returnToDashboard(dash);
 }
 
-function showStats() {
-  console.log();
-  printPeriodStatsTable(getAllPeriodStats());
-  console.log();
-  printLocalStats(getTotals());
-  console.log();
-  printKeyHint();
-}
-
-async function showStatsMenu() {
+async function showStatsMenu(dash) {
   console.log();
   printPeriodStatsTable(getAllPeriodStats());
   console.log();
@@ -175,38 +149,36 @@ async function showStatsMenu() {
     "Back",
   ]);
   if (!pick || pick.startsWith("Back")) {
-    printKeyHint();
+    returnToDashboard(dash);
     return;
   }
   if (pick.startsWith("Clear")) {
-    const conf = (await prompt("Type CLEAR to wipe local token history: ")).trim();
-    if (conf === "CLEAR") {
+    const yes = await confirm("Wipe local token history?", false);
+    if (yes) {
       clearStats();
       ok("Local stats cleared");
     } else {
       warn("Cancelled");
     }
-    printKeyHint();
+    returnToDashboard(dash);
     return;
   }
   const period = PERIODS.find((p) => pick.startsWith(p.label));
-  if (period) {
-    printPeriodDetail(getPeriodStats(period.id));
-  }
-  printKeyHint();
+  if (period) printPeriodDetail(getPeriodStats(period.id));
+  console.log();
+  printLocalStats(getTotals());
+  console.log();
+  await confirm("Back to dashboard?", true);
+  returnToDashboard(dash);
 }
 
-function clearScreen(ctx) {
-  console.clear();
-  printHeader(ctx.port, ctx.host, loadConfig());
-}
-
-async function showAccounts() {
+async function showAccounts(dash) {
   console.log();
   const statuses = listAccountStatuses();
   if (!statuses.length) {
     warn(`No accounts at ${keysFilePath()}`);
-    printKeyHint();
+    await confirm("Back to dashboard?", true);
+    returnToDashboard(dash);
     return;
   }
   printAccountSummary(statuses, keysFilePath());
@@ -221,31 +193,23 @@ async function showAccounts() {
     },
   ]);
   console.log();
-  info(`Fetching usage for all ${statuses.length} account(s)…`);
-  const result = await fetchAllAccountsUsage({
-    onProgress: (row, i, total) => {
-      const mark = row.ok ? c.green("✔") : c.red("✖");
-      process.stdout.write(
-        `\r  ${mark} ${String(i).padStart(3)}/${total}  ${row.email.padEnd(28)} ${row.ok ? row.credit : "fail"}   `
-      );
-    },
-  });
+  try {
+    const result = await withSpinner(`Fetching usage (${statuses.length} accounts)…`, async (update) =>
+      fetchAllAccountsUsage({
+        onProgress: (row, i, total) => update(`Fetching ${i}/${total}  ${row.email}`),
+      })
+    );
+    console.log();
+    printAccountsUsageTable(result.rows);
+  } catch (e) {
+    err(e.message || e);
+  }
   console.log();
-  console.log();
-  printAccountsUsageTable(result.rows);
-  printKeyHint();
+  await confirm("Back to dashboard?", true);
+  returnToDashboard(dash);
 }
 
-function showRecent() {
-  console.log();
-  section("Recent requests");
-  const rows = getRecent(20);
-  if (!rows.length) info("No requests yet");
-  else for (const e of rows.slice().reverse()) printRequestLog(e);
-  printKeyHint();
-}
-
-function showModels() {
+function showModels(dash) {
   console.log();
   section("Models · max context");
   printTable(
@@ -261,14 +225,13 @@ function showModels() {
     ]
   );
   console.log();
-  printKeyHint();
 }
 
-async function showToolsQuick() {
+async function showToolsQuick(dash) {
   console.log();
   section("CLI Tools");
-  info("Type a number + Enter · 0 to cancel · then hotkeys resume");
-  const rows = await statusAll();
+  info("Type a number + Enter · 0 to cancel");
+  const rows = await withSpinner("Checking tool status…", () => statusAll());
   printTable(rows, [
     { key: "id", header: "TOOL", width: 10 },
     {
@@ -284,160 +247,135 @@ async function showToolsQuick() {
     listToolIds().filter((x) => x !== "cursor")
   );
   if (!id) {
-    warn("Cancelled — back to live log");
-    printKeyHint();
+    warn("Cancelled");
+    returnToDashboard(dash);
     return;
   }
   const model = await pickModel(getDefaultModel(), "Select main model");
   if (!model) {
-    warn("Cancelled — back to live log");
-    printKeyHint();
+    warn("Cancelled");
+    returnToDashboard(dash);
     return;
   }
   let subagentModel;
   if (toolSupportsSubagent(id)) {
     subagentModel = await pickSubagentModel(id, model);
   }
-  const result = await applyTool(id, { model, subagentModel });
-  ok(`Applied ${id} → ${model}`);
+  const yes = await confirm(`Apply ${id} → ${model}?`, true);
+  if (!yes) {
+    warn("Cancelled");
+    returnToDashboard(dash);
+    return;
+  }
+  const result = await withSpinner(
+    `Applying ${id}…`,
+    () => applyTool(id, { model, subagentModel }),
+    { success: `Applied ${id} → ${model}` }
+  );
   if (result.subagentModel || subagentModel) kv("Subagent", result.subagentModel || subagentModel);
   if (result.settingsPath) kv("Config", result.settingsPath);
   if (result.message) info(result.message);
-  printKeyHint();
+  console.log();
+  await confirm("Back to dashboard?", true);
+  returnToDashboard(dash);
 }
 
-/**
- * Central interactive menu while proxy keeps running.
- */
-async function openCentralMenu(ctx) {
+async function openCentralMenu(ctx, dash) {
   console.log();
   hr();
   section("Central menu");
-  kv("Proxy", "still running");
-  info("Type number + Enter · 0 cancels back to live log");
+  kv("Proxy", c.green("running"));
   console.log();
   const pick = await choose("Select:", [
     "Usage / quota (all accounts)",
     "Local token stats (1d / 3d / 7d / 30d / all)",
-    "Clear screen",
+    "Refresh dashboard",
     "Accounts + usage",
-    "Recent requests",
+    "Open log frame (L)",
     "Models (max context)",
     "CLI Tools apply",
     "Help",
-    "Back to live log",
+    "Back to dashboard",
     "Quit proxy",
   ]);
   if (!pick || pick.startsWith("Back")) {
-    ok("Back to live log");
-    printKeyHint();
+    returnToDashboard(dash);
     return;
   }
   if (pick.startsWith("Quit")) {
-    ctx.shutdown();
+    const yes = await confirm("Stop proxy and quit?", false);
+    if (yes) ctx.shutdown();
+    else returnToDashboard(dash);
     return;
   }
-  if (pick.startsWith("Usage")) return showUsage();
-  if (pick.startsWith("Local")) return showStatsMenu();
-  if (pick.startsWith("Clear screen")) {
-    clearScreen(ctx);
+  if (pick.startsWith("Usage")) return showUsage(dash);
+  if (pick.startsWith("Local")) return showStatsMenu(dash);
+  if (pick.startsWith("Refresh")) {
+    returnToDashboard(dash);
     return;
   }
-  if (pick.startsWith("Accounts")) return showAccounts();
-  if (pick.startsWith("Recent")) return showRecent();
-  if (pick.startsWith("Models")) return showModels();
-  if (pick.startsWith("CLI")) return showToolsQuick();
+  if (pick.startsWith("Accounts")) return showAccounts(dash);
+  if (pick.startsWith("Open log")) {
+    dash.openLogs();
+    return;
+  }
+  if (pick.startsWith("Models")) {
+    showModels(dash);
+    await confirm("Back to dashboard?", true);
+    returnToDashboard(dash);
+    return;
+  }
+  if (pick.startsWith("CLI")) return showToolsQuick(dash);
   if (pick.startsWith("Help")) {
     printHelpPanel();
+    await confirm("Back to dashboard?", true);
+    returnToDashboard(dash);
     return;
   }
-  printKeyHint();
+  returnToDashboard(dash);
 }
 
 /**
- * Start proxy and run interactive live console (logs + key commands).
+ * Start proxy and run interactive live console (minimal dashboard + log frame).
  */
 export async function runLiveProxy(flags = {}) {
   ensureKeysImported();
   const cfg = loadConfig();
-  const { start, port, host, server } = createServer({
-    port: flags.port || cfg.port,
-    host: flags.host || cfg.host,
-    noAuth: flags.noAuth,
+
+  const boot = withSpinner("Starting proxy…", async () => {
+    const created = createServer({
+      port: flags.port || cfg.port,
+      host: flags.host || cfg.host,
+      noAuth: flags.noAuth,
+    });
+    await created.start();
+    return created;
   });
 
-  await start();
-  printHeader(port, host, loadConfig());
+  const { start: _start, port, host, server } = await boot;
+  const liveCfg = loadConfig();
 
-  const offLog = onRequest((entry) => printRequestLog(entry));
+  const dash = new LiveDashboard({
+    port,
+    host,
+    version: pkgVersion(),
+    baseUrl: getBaseUrl({ ...liveCfg, port }),
+    apiKey: liveCfg.localApiKey,
+    model: getDefaultModel(liveCfg),
+    accountsLabel: accountsLabel(),
+  });
+  dash.render();
+
+  const offLog = onRequest((entry) => {
+    dash.push(entry);
+  });
 
   let busy = false;
   let hotkeysOn = false;
   let resolveLoop;
+  let escSeq = "";
 
-  const onHotkey = (chunk) => {
-    if (busy || !hotkeysOn) return;
-    const key = String(chunk);
-    if (key === "\u0003" || key === "q" || key === "Q") {
-      shutdown();
-      resolveLoop?.();
-      return;
-    }
-    if (key === "m" || key === "M") return void runAction(() => openCentralMenu(ctx));
-    if (key === "h" || key === "H" || key === "?" || key === "/") {
-      printHelpPanel();
-      return;
-    }
-    if (key === "u" || key === "U") return void runAction(showUsage);
-    if (key === "s" || key === "S") return void runAction(showStatsMenu);
-    if (key === "c" || key === "C") {
-      clearScreen(ctx);
-      return;
-    }
-    if (key === "a" || key === "A") return void runAction(showAccounts);
-    if (key === "l" || key === "L") {
-      showRecent();
-      return;
-    }
-    if (key === "t" || key === "T") return void runAction(showToolsQuick);
-  };
-
-  const enableHotkeys = () => {
-    if (!process.stdin.isTTY || hotkeysOn) return;
-    try {
-      process.stdin.setRawMode(true);
-    } catch {
-      /* ignore */
-    }
-    process.stdin.setEncoding("utf8");
-    process.stdin.resume();
-    process.stdin.on("data", onHotkey);
-    hotkeysOn = true;
-  };
-
-  /** Detach hotkeys so readline prompts own stdin exclusively. */
-  const disableHotkeys = () => {
-    if (!hotkeysOn) return;
-    process.stdin.removeListener("data", onHotkey);
-    try {
-      process.stdin.setRawMode(false);
-    } catch {
-      /* ignore */
-    }
-    hotkeysOn = false;
-  };
-
-  const cleanup = () => {
-    offLog();
-    disableHotkeys();
-    try {
-      process.stdin.pause();
-    } catch {
-      /* ignore */
-    }
-  };
-
-  const shutdown = () => {
+  const shutdown = async () => {
     cleanup();
     console.log();
     ok("Proxy stopped");
@@ -449,15 +387,186 @@ export async function runLiveProxy(flags = {}) {
     process.exit(0);
   };
 
-  process.on("SIGINT", shutdown);
-  process.on("SIGTERM", shutdown);
+  const ctx = { shutdown, port, host };
+
+  const onHotkey = (chunk) => {
+    if (busy || !hotkeysOn) return;
+    const key = String(chunk);
+
+    // Parse ANSI escape sequences for arrows / page keys
+    if (key === "\x1b" || escSeq) {
+      escSeq += key;
+      if (escSeq === "\x1b") return; // wait for rest
+      // Esc alone (close logs) — after short grace handled by incomplete seq timeout
+      if (escSeq === "\x1b[" || escSeq === "\x1bO") return;
+      const seq = escSeq;
+      escSeq = "";
+      if (seq === "\x1b[A" || seq === "\x1bOA") {
+        if (dash.isLogsOpen()) dash.scrollLogs("up");
+        return;
+      }
+      if (seq === "\x1b[B" || seq === "\x1bOB") {
+        if (dash.isLogsOpen()) dash.scrollLogs("down");
+        return;
+      }
+      if (seq === "\x1b[5~") {
+        if (dash.isLogsOpen()) dash.scrollLogs("pageup");
+        return;
+      }
+      if (seq === "\x1b[6~") {
+        if (dash.isLogsOpen()) dash.scrollLogs("pagedown");
+        return;
+      }
+      if (seq === "\x1b" || seq === "\x1b\x1b") {
+        if (dash.isLogsOpen()) {
+          dash.closeLogs();
+          return;
+        }
+      }
+      // Unknown escape — ignore
+      return;
+    }
+
+    if (key === "\u0003") {
+      void runAction(async () => {
+        const yes = await confirm("Stop proxy and quit?", false);
+        if (yes) await shutdown();
+        else returnToDashboard(dash);
+      });
+      return;
+    }
+
+    if (key === "q" || key === "Q") {
+      if (dash.isLogsOpen()) {
+        dash.closeLogs();
+        return;
+      }
+      void runAction(async () => {
+        const yes = await confirm("Stop proxy and quit?", false);
+        if (yes) await shutdown();
+        else returnToDashboard(dash);
+      });
+      return;
+    }
+
+    // Log frame navigation
+    if (dash.isLogsOpen()) {
+      if (key === "l" || key === "L" || key === "\r" || key === "\n") {
+        dash.closeLogs();
+        return;
+      }
+      if (key === "k" || key === "K") {
+        dash.scrollLogs("up");
+        return;
+      }
+      if (key === "j" || key === "J") {
+        dash.scrollLogs("down");
+        return;
+      }
+      if (key === "g") {
+        dash.scrollLogs("home");
+        return;
+      }
+      if (key === "G") {
+        dash.scrollLogs("end");
+        return;
+      }
+      // While logs open, ignore other action keys except m/h
+      if (key === "m" || key === "M") return void runAction(() => openCentralMenu(ctx, dash));
+      if (key === "h" || key === "H" || key === "?") {
+        printHelpPanel();
+        return;
+      }
+      return;
+    }
+
+    if (key === "l" || key === "L") {
+      dash.toggleLogs();
+      return;
+    }
+    if (key === "m" || key === "M") return void runAction(() => openCentralMenu(ctx, dash));
+    if (key === "h" || key === "H" || key === "?" || key === "/") {
+      void runAction(async () => {
+        printHelpPanel();
+        await confirm("Back to dashboard?", true);
+        returnToDashboard(dash);
+      });
+      return;
+    }
+    if (key === "u" || key === "U") return void runAction(() => showUsage(dash));
+    if (key === "s" || key === "S") return void runAction(() => showStatsMenu(dash));
+    if (key === "c" || key === "C") {
+      dash.setMeta({ accountsLabel: accountsLabel(), model: getDefaultModel(loadConfig()) });
+      dash.render();
+      return;
+    }
+    if (key === "a" || key === "A") return void runAction(() => showAccounts(dash));
+    if (key === "t" || key === "T") return void runAction(() => showToolsQuick(dash));
+  };
+
+  // Flush lone Esc after timeout (close log frame)
+  let escTimer = null;
+  const onHotkeyWrapped = (chunk) => {
+    if (String(chunk) === "\x1b") {
+      clearTimeout(escTimer);
+      escTimer = setTimeout(() => {
+        if (escSeq === "\x1b") {
+          escSeq = "";
+          if (dash.isLogsOpen()) dash.closeLogs();
+        }
+      }, 50);
+    }
+    onHotkey(chunk);
+  };
+
+  const enableHotkeys = () => {
+    if (!process.stdin.isTTY || hotkeysOn) return;
+    try {
+      process.stdin.setRawMode(true);
+    } catch {
+      /* ignore */
+    }
+    process.stdin.setEncoding("utf8");
+    process.stdin.resume();
+    process.stdin.on("data", onHotkeyWrapped);
+    hotkeysOn = true;
+  };
+
+  const disableHotkeys = () => {
+    if (!hotkeysOn) return;
+    process.stdin.removeListener("data", onHotkeyWrapped);
+    try {
+      process.stdin.setRawMode(false);
+    } catch {
+      /* ignore */
+    }
+    hotkeysOn = false;
+  };
+
+  const cleanup = () => {
+    offLog();
+    disableHotkeys();
+    clearTimeout(escTimer);
+    try {
+      process.stdin.pause();
+    } catch {
+      /* ignore */
+    }
+  };
+
+  process.on("SIGINT", () => {
+    void runAction(async () => {
+      const yes = await confirm("Stop proxy and quit?", false);
+      if (yes) await shutdown();
+      else returnToDashboard(dash);
+    });
+  });
+  process.on("SIGTERM", () => void shutdown());
 
   if (!process.stdin.isTTY) {
     await new Promise(() => {});
     return;
   }
-
-  const ctx = { shutdown, port, host };
 
   const runAction = async (fn) => {
     if (busy) return;
@@ -467,7 +576,7 @@ export async function runLiveProxy(flags = {}) {
       await fn();
     } catch (e) {
       err(e?.message || e);
-      printKeyHint();
+      returnToDashboard(dash);
     } finally {
       busy = false;
       enableHotkeys();

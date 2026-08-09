@@ -17,7 +17,7 @@
   },
   "scripts": {
     "start": "node bin/kirouter.js start",
-    "check": "node --check bin/kirouter.js && node --check src/cli.js && node --check src/server.js && node --check src/tui/menu.js && node --check src/tui/live.js && node --check src/util/ui.js && node --check src/kiro/usage.js && node --check src/store/stats.js && node src/check.js",
+    "check": "node --check bin/kirouter.js && node --check src/cli.js && node --check src/server.js && node --check src/tui/menu.js && node --check src/tui/live.js && node --check src/tui/dashboard.js && node --check src/util/ui.js && node --check src/util/spinner.js && node --check src/util/input.js && node --check src/util/tokens.js && node --check src/kiro/eventStream.js && node --check src/kiro/client.js && node --check src/kiro/usage.js && node --check src/store/stats.js && node src/check.js",
     "prepublishOnly": "npm run check",
     "pack:dry": "npm pack --dry-run"
   },
@@ -34,12 +34,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/decolua/kirouter.git"
+    "url": "git+https://github.com/lrndwy/kirouter.git"
   },
   "bugs": {
-    "url": "https://github.com/decolua/kirouter/issues"
+    "url": "https://github.com/lrndwy/kirouter/issues"
   },
-  "homepage": "https://github.com/decolua/kirouter#readme",
+  "homepage": "https://github.com/lrndwy/kirouter#readme",
   "publishConfig": {
     "access": "public",
     "registry": "https://registry.npmjs.org/"

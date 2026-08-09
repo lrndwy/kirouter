@@ -24,19 +24,19 @@ export function progressBar(pct, width = 12) {
   return color(fill + empty);
 }
 
-/** Professional request log with tokens + context. */
-export function printRequestLog(entry) {
+/** Format request log as lines (for scrollable frame). */
+export function formatRequestLogLines(entry) {
   const time = c.dim(ts(new Date(entry.at)));
   const method = c.cyan((entry.method || "POST").padEnd(4));
   const path = (entry.path || "").replace(/^\/v1\//, "");
   const model = entry.model ? c.bold(entry.model) : c.dim("-");
   const account = entry.account ? c.dim(entry.account) : "";
   const stream = entry.stream ? c.dim("stream") : c.dim("json  ");
-  const err = entry.error ? ` ${c.red(String(entry.error).slice(0, 60))}` : "";
+  const errMsg = entry.error ? ` ${c.red(String(entry.error).slice(0, 60))}` : "";
 
-  console.log(
-    `${time}  ${method} ${path.padEnd(18)} ${statusColor(entry.status)}  ${String(entry.ms).padStart(5)}ms  ${stream}  ${model}${account ? `  ${account}` : ""}${err}`
-  );
+  const lines = [
+    `${time}  ${method} ${path.padEnd(18)} ${statusColor(entry.status)}  ${String(entry.ms).padStart(5)}ms  ${stream}  ${model}${account ? `  ${account}` : ""}${errMsg}`,
+  ];
 
   const hasTokens = entry.promptTokens || entry.completionTokens || entry.maxContext;
   if (hasTokens || entry.contextPct != null) {
@@ -52,8 +52,14 @@ export function printRequestLog(entry) {
       const pct = Math.min(100, Math.round((total / entry.maxContext) * 100));
       ctxPart = `${c.dim("ctx")} ${progressBar(pct, 10)} ${c.bold(`${pct}%`)} ${c.dim(`/ ${ctxMax}`)}`;
     }
-    console.log(`          ${inn}  ·  ${out}  ·  ${ctxPart}`);
+    lines.push(`          ${inn}  ·  ${out}  ·  ${ctxPart}`);
   }
+  return lines;
+}
+
+/** Professional request log with tokens + context. */
+export function printRequestLog(entry) {
+  for (const line of formatRequestLogLines(entry)) console.log(line);
 }
 
 export function printUsageBlock(usage) {

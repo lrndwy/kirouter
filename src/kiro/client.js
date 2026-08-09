@@ -7,6 +7,13 @@ import {
 } from "./eventStream.js";
 import { claudeToKiroRequest, openaiToKiroRequest } from "./openaiToKiro.js";
 import { withAccountFailover } from "./pool.js";
+import {
+  estimateAnthropicInputTokens,
+  estimateOpenAIInputTokens,
+  finalizeUsage,
+  toClaudeUsage,
+  toOpenAIUsage,
+} from "../util/tokens.js";
 
 const URL_FALLBACK_STATUSES = new Set([404, 500, 502, 503]);
 
@@ -45,22 +52,7 @@ async function postKiroOnce(credentials, payload) {
   throw lastError || new Error("Kiro request failed");
 }
 
-function estimateInputTokens(body) {
-  try {
-    return Math.max(1, Math.ceil(JSON.stringify(body?.messages || body || "").length / 4));
-  } catch {
-    return 0;
-  }
-}
-
-function withUsageFallback(usage, estimatedInput) {
-  const u = { ...(usage || {}) };
-  if (!u.prompt_tokens && estimatedInput) u.prompt_tokens = estimatedInput;
-  u.total_tokens = (u.prompt_tokens || 0) + (u.completion_tokens || 0);
-  return u;
-}
-
-async function runChat(body, toPayload) {
+async function runChat(body, toPayload, estimateFn) {
   const model = body.model || "claude-sonnet-4.5";
   const stream = body.stream !== false;
 
@@ -82,14 +74,15 @@ async function runChat(body, toPayload) {
     upstream,
     account: credentials?.email || credentials?.providerSpecificData?.email || "",
     maxContext: getModelContextLength(model),
-    estimatedInput: estimateInputTokens(body),
+    estimatedInput: estimateFn(body),
   };
 }
 
 export async function proxyOpenAIChat(body) {
   const { model, stream, upstream, account, maxContext, estimatedInput } = await runChat(
     body,
-    openaiToKiroRequest
+    openaiToKiroRequest,
+    estimateOpenAIInputTokens
   );
 
   let resolveDone;
@@ -98,9 +91,16 @@ export async function proxyOpenAIChat(body) {
   });
 
   const sse = transformEventStreamToOpenAI(upstream, model, {
+    contextWindow: maxContext,
+    estimatedInput,
     onComplete: (meta) => {
       resolveDone({
-        usage: withUsageFallback(meta.usage, estimatedInput),
+        usage: finalizeUsage({
+          usage: meta.usage,
+          contextUsagePercentage: meta.contextUsagePercentage,
+          contextWindow: maxContext,
+          estimatedInput,
+        }),
         contextUsagePercentage: meta.contextUsagePercentage,
         maxContext,
       });
@@ -112,7 +112,12 @@ export async function proxyOpenAIChat(body) {
   }
 
   const json = await collectOpenAICompletion(sse, model);
-  json.usage = withUsageFallback(json.usage, estimatedInput);
+  json.usage = finalizeUsage({
+    usage: toOpenAIUsage(json.usage),
+    contextWindow: maxContext,
+    estimatedInput,
+    outputChars: String(json.choices?.[0]?.message?.content || "").length,
+  });
   const meta = await whenDone.catch(() => ({
     usage: json.usage,
     contextUsagePercentage: null,
@@ -132,7 +137,8 @@ export async function proxyOpenAIChat(body) {
 export async function proxyClaudeMessages(body) {
   const { model, stream, upstream, account, maxContext, estimatedInput } = await runChat(
     body,
-    claudeToKiroRequest
+    claudeToKiroRequest,
+    estimateAnthropicInputTokens
   );
 
   let resolveDone;
@@ -142,9 +148,16 @@ export async function proxyClaudeMessages(body) {
 
   if (stream) {
     const response = transformEventStreamToClaude(upstream, model, {
+      contextWindow: maxContext,
+      estimatedInput,
       onComplete: (meta) => {
         resolveDone({
-          usage: withUsageFallback(meta.usage, estimatedInput),
+          usage: finalizeUsage({
+            usage: meta.usage,
+            contextUsagePercentage: meta.contextUsagePercentage,
+            contextWindow: maxContext,
+            estimatedInput,
+          }),
           contextUsagePercentage: meta.contextUsagePercentage,
           maxContext,
         });
@@ -154,9 +167,16 @@ export async function proxyClaudeMessages(body) {
   }
 
   const openaiSse = transformEventStreamToOpenAI(upstream, model, {
+    contextWindow: maxContext,
+    estimatedInput,
     onComplete: (meta) => {
       resolveDone({
-        usage: withUsageFallback(meta.usage, estimatedInput),
+        usage: finalizeUsage({
+          usage: meta.usage,
+          contextUsagePercentage: meta.contextUsagePercentage,
+          contextWindow: maxContext,
+          estimatedInput,
+        }),
         contextUsagePercentage: meta.contextUsagePercentage,
         maxContext,
       });
@@ -164,7 +184,13 @@ export async function proxyClaudeMessages(body) {
   });
   const completion = await collectOpenAICompletion(openaiSse, model);
   const meta = await whenDone.catch(() => ({ usage: completion.usage }));
-  const usage = withUsageFallback(completion.usage || meta.usage, estimatedInput);
+  const usage = finalizeUsage({
+    usage: completion.usage || meta.usage,
+    contextUsagePercentage: meta.contextUsagePercentage,
+    contextWindow: maxContext,
+    estimatedInput,
+    outputChars: String(completion.choices?.[0]?.message?.content || "").length,
+  });
 
   const msg = completion.choices?.[0]?.message || {};
   const content = [];
@@ -200,10 +226,7 @@ export async function proxyClaudeMessages(body) {
       content,
       stop_reason: msg.tool_calls?.length ? "tool_use" : "end_turn",
       stop_sequence: null,
-      usage: {
-        input_tokens: usage.prompt_tokens || 0,
-        output_tokens: usage.completion_tokens || 0,
-      },
+      usage: toClaudeUsage(usage),
     },
   };
 }

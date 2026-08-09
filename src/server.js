@@ -7,6 +7,7 @@ import { handleModels } from "./routes/models.js";
 import { handleChatCompletions } from "./routes/chatCompletions.js";
 import { handleMessages } from "./routes/messages.js";
 import { getBearerToken, isLoopback, readJson, sendError, sendJson } from "./util/http.js";
+import { estimateAnthropicInputTokens } from "./util/tokens.js";
 
 function normalizePath(url) {
   let path = (url || "/").split("?")[0];
@@ -81,19 +82,10 @@ export function createServer(options = {}) {
       if (method === "POST" && (path === "/v1/messages" || path === "/messages")) {
         return handleMessages(req, res);
       }
-      // Claude Code may probe count_tokens — accept with a minimal stub
+      // Claude Code / Cowork call this for context bar before sending
       if (method === "POST" && path === "/v1/messages/count_tokens") {
         const body = await readJson(req);
-        const text = JSON.stringify(body?.messages || body || "");
-        const input_tokens = Math.max(1, Math.ceil(text.length / 4));
-        recordRequest({
-          method,
-          path,
-          model: body?.model || "",
-          status: 200,
-          ms: Date.now() - t0,
-          promptTokens: input_tokens,
-        });
+        const input_tokens = estimateAnthropicInputTokens(body);
         return sendJson(res, 200, { input_tokens });
       }
 

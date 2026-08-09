@@ -27,7 +27,7 @@ npx kirouter
 Dari source:
 
 ```bash
-git clone https://github.com/decolua/kirouter.git
+git clone https://github.com/lrndwy/kirouter.git
 cd kirouter
 npm install -g .
 ```
@@ -40,9 +40,13 @@ Jalankan saja — proxy + live dashboard otomatis start:
 kirouter
 ```
 
-Keys saat proxy jalan: `m` menu · `h` help · `u` usage · `s` stats · `a` accounts · `l` recent · `t` tools · `q` quit
+Dashboard default **minimal** (logo + status + activity box). Log panjang tidak menggulung layar.
 
-Setiap request menampilkan **input/output tokens** dan **max context** (dari metrics Kiro).
+Keys saat proxy jalan:
+- `L` — buka / tutup **frame log scrollable** (`↑↓` / `PgUp` `PgDn` / `g` `G` · `Esc` tutup)
+- `m` menu · `h` help · `u` usage · `s` stats · `a` accounts · `t` tools · `c` refresh · `q` quit
+
+Setiap request menyimpan **input/output tokens** + **max context**; lihat detail di frame `L`.
 
 ### Multi-akun (disarankan): `kiro_keys.txt`
 
@@ -84,6 +88,9 @@ kirouter start
 ```bash
 kirouter tools claude --model claude-sonnet-4.5
 ```
+
+Token/context di Claude Code & Cowork dibaca dari `usage` pada `/v1/messages` (+ `/v1/messages/count_tokens`).
+OpenCode membutuhkan `limit.context` di config — `kirouter tools opencode` menulisnya otomatis.
 
 ### Install ke Claude Desktop (Cowork)
 
@@ -195,7 +202,7 @@ curl http://localhost:20129/v1/chat/completions \
 git init
 git add .
 git commit -m "Initial release"
-gh repo create decolua/kirouter --public --source=. --remote=origin --push
+gh repo create lrndwy/kirouter --public --source=. --remote=origin --push
 
 # 2) npm (sekali: npm login)
 npm run pack:dry    # pastikan kiro_keys.txt TIDAK ikut

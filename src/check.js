@@ -7,6 +7,11 @@ import { STATIC_MODELS, formatContext, getModelContextLength } from "./kiro/cons
 import { listToolIds } from "./cli-tools/index.js";
 import { parseKeysText, socialRefreshToken } from "./store/accounts.js";
 import { resolveUpstreamModel, toClaudeCodeModelId } from "./kiro/modelAlias.js";
+import {
+  estimateAnthropicInputTokens,
+  finalizeUsage,
+  toClaudeUsage,
+} from "./util/tokens.js";
 
 const sampleKeys = `
 # comment
@@ -91,5 +96,24 @@ assert.equal(resolveUpstreamModel("claude-sonnet-4-5-20250929"), "claude-sonnet-
 assert.equal(resolveUpstreamModel("claude-sonnet-4.5"), "claude-sonnet-4.5");
 assert.equal(toClaudeCodeModelId("claude-sonnet-4.5"), "claude-sonnet-4-5");
 assert.equal(toClaudeCodeModelId("sonnet"), "claude-sonnet-4-5");
+
+// Token estimation + Kiro fallback (context% × window)
+const est = estimateAnthropicInputTokens({
+  system: "hi",
+  messages: [{ role: "user", content: "hello world" }],
+});
+assert.ok(est >= 1);
+const fromContext = finalizeUsage({
+  contextUsagePercentage: 10,
+  contextWindow: 200000,
+  estimatedInput: est,
+  outputChars: 40,
+  hasMetering: true,
+});
+assert.equal(fromContext.prompt_tokens, 20000);
+assert.equal(fromContext.completion_tokens, 10);
+const claudeU = toClaudeUsage(fromContext);
+assert.equal(claudeU.input_tokens, 20000);
+assert.equal(claudeU.output_tokens, 10);
 
 console.log("check ok");

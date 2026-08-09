@@ -1,6 +1,6 @@
 import readline from "node:readline";
 import { STATIC_MODELS } from "../kiro/constants.js";
-import { c } from "./ui.js";
+import { c, warn } from "./ui.js";
 
 /** Ensure stdin is in cooked line mode for readline prompts. */
 function prepareStdinForPrompt() {
@@ -37,13 +37,30 @@ export function prompt(question) {
   });
 }
 
+/**
+ * Yes/No confirm. Returns boolean.
+ * @param {string} question
+ * @param {boolean} [defaultYes=true]
+ */
+export async function confirm(question, defaultYes = true) {
+  const hint = defaultYes ? c.dim("Y/n") : c.dim("y/N");
+  const answer = await prompt(`${question} ${hint} › `);
+  if (!answer) return defaultYes;
+  if (/^y(es)?$/i.test(answer)) return true;
+  if (/^n(o)?$/i.test(answer)) return false;
+  warn("Please answer y or n");
+  return confirm(question, defaultYes);
+}
+
 export async function choose(question, options) {
-  console.log(c.bold(question));
+  console.log();
+  console.log(c.bold(`▸ ${question}`));
   options.forEach((opt, i) => {
     console.log(`  ${c.cyan(String(i + 1).padStart(2))}  ${opt}`);
   });
-  console.log(c.dim("  0  cancel"));
-  const answer = await prompt(c.dim("Select number") + " › ");
+  console.log(`  ${c.dim(" 0")}  ${c.dim("cancel")}`);
+  console.log();
+  const answer = await prompt(c.dim("Select") + " › ");
   if (!answer || answer === "0" || /^c(ancel)?$/i.test(answer)) return null;
   const idx = Number.parseInt(answer, 10) - 1;
   if (Number.isNaN(idx) || idx < 0 || idx >= options.length) return null;

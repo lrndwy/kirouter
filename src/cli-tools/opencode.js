@@ -1,5 +1,7 @@
 import os from "node:os";
 import path from "node:path";
+import { getModelContextLength } from "../kiro/constants.js";
+import { DEFAULT_OUTPUT_LIMIT } from "../util/tokens.js";
 import { normalizeV1, readJsonFile, whichCommand, writeJsonFile } from "./helpers.js";
 
 const configPath = () => path.join(os.homedir(), ".config", "opencode", "opencode.json");
@@ -35,10 +37,16 @@ export async function apply({ baseUrl, apiKey, model, subagentModel }) {
     apiKey: apiKey || "sk_kirouter",
   };
   existing.models = existing.models || {};
+  // OpenCode needs limit.context or context UI stays at 0 / undetectable.
   const register = (id) => {
+    const ctx = getModelContextLength(id) || 200000;
     existing.models[id] = {
       name: id,
       modalities: { input: ["text", "image"], output: ["text"] },
+      limit: {
+        context: ctx,
+        output: DEFAULT_OUTPUT_LIMIT,
+      },
     };
   };
   register(model);

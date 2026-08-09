@@ -85,7 +85,8 @@ function printHelp() {
   kirouter --help
 
 ${c.bold("Live keys")} (saat proxy jalan)
-  m menu · h help · u usage · s stats · c clear · a accounts · l recent · t tools · q quit
+  L logs (scrollable frame) · m menu · h help · u usage · s stats
+  c refresh · a accounts · t tools · q quit
 
 ${c.bold("Multi-account")}  ${c.dim("email|refreshToken")} per line
   Default: ~/.kirouter/kiro_keys.txt  or  ./kiro_keys.txt
