@@ -10,6 +10,7 @@ import { resolveUpstreamModel, toClaudeCodeModelId } from "./kiro/modelAlias.js"
 import { tokenSaverPreprocess } from "./middleware/tokenSaver.js";
 import { contextCompactMaybe } from "./middleware/contextCompact.js";
 import { asciiLogoLines } from "./util/ui.js";
+import { validateKiroConversation, normalizeKiroToolSpecs } from "./kiro/conversation.js";
 import {
   estimateAnthropicInputTokens,
   finalizeUsage,
@@ -211,5 +212,90 @@ const noCompact = contextCompactMaybe(
   { enabled: true, thresholdPct: 70, keepRecentMessages: 12 }
 );
 assert.equal(noCompact.stats.compacted, false);
+
+// --- v0.2.1: canonicalize invalid Claude/Kiro tool conversations ---
+function assertValidKiro(body) {
+  const payload = claudeToKiroRequest(body.model || "claude-sonnet-4.5", body, cred);
+  const { specs } = normalizeKiroToolSpecs(body.tools || []);
+  const v = validateKiroConversation(
+    payload.conversationState.history,
+    payload.conversationState.currentMessage,
+    specs
+  );
+  assert.equal(v.valid, true, `expected valid kiro body, got ${JSON.stringify(v.errors)}`);
+  return payload;
+}
+
+assertValidKiro({
+  tools: [{ name: "Bash", description: "d", input_schema: { type: "object", properties: {} } }],
+  messages: [
+    { role: "user", content: "hi" },
+    {
+      role: "assistant",
+      content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: {} }],
+    },
+  ],
+});
+
+assertValidKiro({
+  tools: [{ name: "Bash", description: "d", input_schema: { type: "object", properties: {} } }],
+  messages: [
+    {
+      role: "user",
+      content: [
+        { type: "tool_result", tool_use_id: "missing", content: "data" },
+        { type: "text", text: "go" },
+      ],
+    },
+  ],
+});
+
+assertValidKiro({
+  tools: [{ name: "Bash", description: "d", input_schema: { type: "object", properties: {} } }],
+  messages: [
+    { role: "user", content: "hi" },
+    {
+      role: "assistant",
+      content: [{ type: "tool_use", id: "t1", name: "OldTool", input: {} }],
+    },
+    {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "t1", content: "x" }],
+    },
+  ],
+});
+
+const happy = assertValidKiro({
+  tools: [
+    {
+      name: "Bash",
+      description: "d",
+      input_schema: {
+        type: "object",
+        properties: { command: { type: "string" } },
+        required: ["command"],
+        additionalProperties: false,
+      },
+    },
+  ],
+  messages: [
+    { role: "user", content: "hi" },
+    {
+      role: "assistant",
+      content: [
+        { type: "thinking", thinking: "plan" },
+        { type: "text", text: "run" },
+        { type: "tool_use", id: "toolu_ok", name: "Bash", input: { command: "ls" } },
+      ],
+    },
+    {
+      role: "user",
+      content: [{ type: "tool_result", tool_use_id: "toolu_ok", content: "ok" }],
+    },
+  ],
+});
+assert.ok(
+  happy.conversationState.history.some((h) => h.assistantResponseMessage?.toolUses?.length)
+);
 
 console.log("check ok");

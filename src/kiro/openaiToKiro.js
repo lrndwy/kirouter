@@ -1,5 +1,9 @@
 import crypto from "node:crypto";
 import { KIRO_DEFAULT_PROFILE_ARNS } from "./constants.js";
+import {
+  canonicalizeKiroConversation,
+  normalizeKiroToolSpecs,
+} from "./conversation.js";
 import { resolveUpstreamModel } from "./modelAlias.js";
 
 function safeJSONParse(str, fallback) {
@@ -31,36 +35,6 @@ function parseDataUri(url) {
   const m = String(url || "").match(/^data:([^;]+);base64,(.+)$/s);
   if (!m) return null;
   return { mimeType: m[1], base64: m[2] };
-}
-
-function normalizeToolSpecs(tools) {
-  const specs = [];
-  const used = new Set();
-  for (const [index, tool] of (tools || []).entries()) {
-    if (!tool || typeof tool !== "object") continue;
-    const rawName = tool.function?.name ?? tool.name;
-    if (typeof rawName !== "string" || !rawName.trim()) continue;
-    let name = rawName.trim().replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64) || `tool_${index + 1}`;
-    let candidate = name;
-    let n = 2;
-    while (used.has(candidate)) candidate = `${name.slice(0, 60)}_${n++}`;
-    used.add(candidate);
-    const description = String(tool.function?.description ?? tool.description ?? `Tool: ${rawName}`).slice(0, 10237);
-    const schema = tool.function?.parameters ?? tool.parameters ?? tool.input_schema ?? { type: "object", properties: {} };
-    const cleaned = JSON.parse(JSON.stringify(schema));
-    delete cleaned.additionalProperties;
-    cleaned.type = "object";
-    if (!cleaned.properties || typeof cleaned.properties !== "object") cleaned.properties = {};
-    // Kiro/Bedrock requires inputSchema wrapped as { json: <schema> }
-    specs.push({
-      toolSpecification: {
-        name: candidate,
-        description,
-        inputSchema: { json: cleaned },
-      },
-    });
-  }
-  return specs;
 }
 
 function convertMessages(messages, model) {
@@ -235,7 +209,7 @@ function convertMessages(messages, model) {
 
 export function openaiToKiroRequest(model, body, credentials) {
   const upstreamModel = resolveUpstreamModel(model || body.model);
-  const toolSpecs = normalizeToolSpecs(body.tools);
+  const { specs: toolSpecs, nameMap } = normalizeKiroToolSpecs(body.tools);
   const { history, currentMessage } = convertMessages(body.messages || [], upstreamModel);
 
   const authMethod = credentials?.providerSpecificData?.authMethod;
@@ -246,15 +220,22 @@ export function openaiToKiroRequest(model, body, credentials) {
       KIRO_DEFAULT_PROFILE_ARNS[authMethod] ||
       KIRO_DEFAULT_PROFILE_ARNS["builder-id"];
 
-  const current = currentMessage.userInputMessage;
-  if (toolSpecs.length) {
-    current.userInputMessageContext = {
-      ...(current.userInputMessageContext || {}),
-      tools: toolSpecs,
-    };
-  }
+  const canonical = canonicalizeKiroConversation({
+    history,
+    currentMessage,
+    modelId: upstreamModel,
+    toolSpecs,
+    nameMap,
+  });
+
+  const current = canonical.currentMessage.userInputMessage;
   current.modelId = upstreamModel;
   current.origin = "AI_EDITOR";
+
+  const maxTokens = Math.min(
+    32000,
+    Math.max(1, Number(body.max_tokens || body.max_completion_tokens) || 32000)
+  );
 
   const payload = {
     conversationState: {
@@ -263,11 +244,11 @@ export function openaiToKiroRequest(model, body, credentials) {
       agentContinuationId: crypto.randomUUID(),
       agentTaskType: "vibe",
       currentMessage: { userInputMessage: current },
-      history,
+      history: canonical.history,
     },
     agentMode: "vibe",
     inferenceConfig: {
-      maxTokens: body.max_tokens || body.max_completion_tokens || 32000,
+      maxTokens,
     },
   };
 
@@ -296,17 +277,24 @@ export function claudeToKiroRequest(model, body, credentials) {
           type: "function",
           function: { name: c.name, arguments: JSON.stringify(c.input || {}) },
         }));
-      const text = msg.content.filter((c) => c.type === "text").map((c) => c.text).join("\n");
+      const textParts = [];
+      for (const c of msg.content) {
+        if (c.type === "text" && c.text) textParts.push(c.text);
+        // Keep thinking as plain text so turns aren't empty; Kiro has no thinking blocks.
+        else if (c.type === "thinking" && c.thinking) textParts.push(c.thinking);
+      }
       messages.push({
         role: "assistant",
-        content: text,
+        content: textParts.join("\n").trim(),
         ...(toolCalls.length ? { tool_calls: toolCalls } : {}),
       });
       continue;
     }
     if (msg.role === "user" && Array.isArray(msg.content)) {
       const toolResults = msg.content.filter((c) => c.type === "tool_result");
-      const rest = msg.content.filter((c) => c.type !== "tool_result");
+      const rest = msg.content.filter(
+        (c) => c.type !== "tool_result" && c.type !== "tool_use"
+      );
       if (toolResults.length) {
         for (const tr of toolResults) {
           messages.push({

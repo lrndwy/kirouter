@@ -58,6 +58,8 @@ kirouter config set tokenSaver.maxToolResultChars 8000
 kirouter config set contextCompact.thresholdPct 70
 ```
 
+v0.2.1+ juga **canonicalize** conversation Kiro (tool pair orphan/duplikat/nama tool hilang) agar Claude Code / Desktop tidak kena `REQUEST_BODY_INVALID`.
+
 ### Multi-akun (disarankan): `kiro_keys.txt`
 
 Format per baris: `email|refreshToken`
