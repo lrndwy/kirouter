@@ -7,6 +7,7 @@ import {
 } from "./eventStream.js";
 import { claudeToKiroRequest, openaiToKiroRequest } from "./openaiToKiro.js";
 import { withAccountFailover } from "./pool.js";
+import { preprocessRequest } from "../middleware/preprocess.js";
 import {
   estimateAnthropicInputTokens,
   estimateOpenAIInputTokens,
@@ -78,7 +79,8 @@ async function runChat(body, toPayload, estimateFn) {
   };
 }
 
-export async function proxyOpenAIChat(body) {
+export async function proxyOpenAIChat(rawBody) {
+  const { body, preprocess } = preprocessRequest(rawBody, "openai");
   const { model, stream, upstream, account, maxContext, estimatedInput } = await runChat(
     body,
     openaiToKiroRequest,
@@ -108,7 +110,15 @@ export async function proxyOpenAIChat(body) {
   });
 
   if (stream) {
-    return { stream: true, response: sse, model, account, maxContext, whenDone };
+    return {
+      stream: true,
+      response: sse,
+      model,
+      account,
+      maxContext,
+      whenDone,
+      preprocess,
+    };
   }
 
   const json = await collectOpenAICompletion(sse, model);
@@ -131,10 +141,12 @@ export async function proxyOpenAIChat(body) {
     maxContext,
     contextUsagePercentage: meta.contextUsagePercentage,
     usage: json.usage,
+    preprocess,
   };
 }
 
-export async function proxyClaudeMessages(body) {
+export async function proxyClaudeMessages(rawBody) {
+  const { body, preprocess } = preprocessRequest(rawBody, "claude");
   const { model, stream, upstream, account, maxContext, estimatedInput } = await runChat(
     body,
     claudeToKiroRequest,
@@ -163,7 +175,15 @@ export async function proxyClaudeMessages(body) {
         });
       },
     });
-    return { stream: true, response, model, account, maxContext, whenDone };
+    return {
+      stream: true,
+      response,
+      model,
+      account,
+      maxContext,
+      whenDone,
+      preprocess,
+    };
   }
 
   const openaiSse = transformEventStreamToOpenAI(upstream, model, {
@@ -218,6 +238,7 @@ export async function proxyClaudeMessages(body) {
     maxContext,
     contextUsagePercentage: meta.contextUsagePercentage,
     usage,
+    preprocess,
     json: {
       id: `msg_${Date.now()}`,
       type: "message",

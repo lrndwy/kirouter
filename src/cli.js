@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { getBaseUrl, getDefaultModel, loadConfig, saveConfig } from "./store/config.js";
+import { getBaseUrl, getContextCompactConfig, getDefaultModel, getTokenSaverConfig, loadConfig, saveConfig } from "./store/config.js";
 import { clearCredentials, isLoggedIn, loadCredentials, saveCredentials } from "./store/credentials.js";
 import {
   importKeysFile,
@@ -82,7 +82,12 @@ function printHelp() {
   kirouter tools reset <name>
                                 Tools: claude, cowork, codex, opencode, droid, cline, cursor
                                 Aliases: desktop|claude-desktop|claude-cowork → cowork
+  kirouter config               Show token-saver / context-compact settings
+  kirouter config set <k> <v>   Toggle e.g. tokenSaver.enabled true
   kirouter --help
+
+${c.bold("Token saver")}  ${c.dim("default on — truncate large tool results, compact history ≥70% window")}
+  No extra Kiro/LLM calls. Stats appear as ${c.green("saved")} / ${c.yellow("compact")} in Activity + log.
 
 ${c.bold("Live keys")} (saat proxy jalan)
   L logs (scrollable frame) · m menu · h help · u usage · s stats
@@ -487,6 +492,53 @@ async function cmdTools(argv, flags) {
   }
 }
 
+async function cmdConfig(sub = []) {
+  printBanner(pkgVersion());
+  const action = (sub[0] || "").toLowerCase();
+
+  if (action === "set" && sub[1]) {
+    const key = sub[1];
+    const raw = sub[2];
+    if (raw == null) throw new Error("Usage: kirouter config set <key> <value>");
+    let value = raw;
+    if (raw === "true") value = true;
+    else if (raw === "false") value = false;
+    else if (/^\d+$/.test(raw)) value = Number(raw);
+
+    const patch = {};
+    if (key.startsWith("tokenSaver.")) {
+      const field = key.slice("tokenSaver.".length);
+      patch.tokenSaver = { [field]: value };
+    } else if (key.startsWith("contextCompact.")) {
+      const field = key.slice("contextCompact.".length);
+      patch.contextCompact = { [field]: value };
+    } else {
+      throw new Error(
+        `Unknown key: ${key}. Use tokenSaver.enabled|maxToolResultChars|stripImages or contextCompact.enabled|thresholdPct|keepRecentMessages`
+      );
+    }
+    const next = saveConfig(patch);
+    ok(`Updated ${key} = ${JSON.stringify(value)}`);
+    section("Config");
+    kv("tokenSaver", JSON.stringify(next.tokenSaver));
+    kv("contextCompact", JSON.stringify(next.contextCompact));
+    return;
+  }
+
+  section("Token saver / context compact");
+  const ts = getTokenSaverConfig();
+  const cc = getContextCompactConfig();
+  kv("tokenSaver.enabled", String(ts.enabled));
+  kv("tokenSaver.maxToolResultChars", String(ts.maxToolResultChars));
+  kv("tokenSaver.stripImages", String(ts.stripImages));
+  kv("contextCompact.enabled", String(cc.enabled));
+  kv("contextCompact.thresholdPct", `${cc.thresholdPct}%`);
+  kv("contextCompact.keepRecentMessages", String(cc.keepRecentMessages));
+  console.log();
+  info("Set: kirouter config set tokenSaver.enabled false");
+  info("     kirouter config set contextCompact.thresholdPct 80");
+}
+
 export async function runCli(argv) {
   const args = parseArgs(argv);
   if (args.flags.help) return printHelp();
@@ -511,6 +563,7 @@ export async function runCli(argv) {
   if (cmd === "status") return cmdStatus();
   if (cmd === "accounts") return cmdAccounts(args._.slice(1));
   if (cmd === "tools") return cmdTools(args._.slice(1), args.flags);
+  if (cmd === "config") return cmdConfig(args._.slice(1));
   if (cmd === "help") return printHelp();
 
   throw new Error(`Unknown command: ${cmd}. Try kirouter --help`);

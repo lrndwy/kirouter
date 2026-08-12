@@ -48,6 +48,16 @@ Keys saat proxy jalan:
 
 Setiap request menyimpan **input/output tokens** + **max context**; lihat detail di frame `L`.
 
+### Hemat token (v0.2, default on)
+
+Sebelum request ke Kiro, kirouter memangkas `tool_result` besar dan (jika context ≥ **70%** window) merangkum history lama secara lokal — **tanpa** panggilan model ekstra. Status muncul sebagai `saved` / `compact` di Activity & log.
+
+```bash
+kirouter config
+kirouter config set tokenSaver.maxToolResultChars 8000
+kirouter config set contextCompact.thresholdPct 70
+```
+
 ### Multi-akun (disarankan): `kiro_keys.txt`
 
 Format per baris: `email|refreshToken`
@@ -135,6 +145,8 @@ kirouter status
 | `kirouter tools <name>` | Apply config ke tool (pilih model interaktif) |
 | `kirouter tools <name> --model <id>` | Apply dengan model tertentu |
 | `kirouter tools reset <name>` | Reset config tool |
+| `kirouter config` | Lihat token-saver / context-compact |
+| `kirouter config set <k> <v>` | Ubah setting hemat token |
 
 Flags: `-p/--port`, `-H/--host`, `--no-auth`, `--model`.
 

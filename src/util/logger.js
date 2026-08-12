@@ -54,6 +54,13 @@ export function formatRequestLogLines(entry) {
     }
     lines.push(`          ${inn}  ·  ${out}  ·  ${ctxPart}`);
   }
+  if (entry.savedTokens || entry.compacted || entry.truncatedResults) {
+    const bits = [];
+    if (entry.savedTokens) bits.push(c.green(`saved ~${fmtNum(entry.savedTokens)}`));
+    if (entry.compacted) bits.push(c.yellow("compact"));
+    if (entry.truncatedResults) bits.push(c.dim(`trunc×${entry.truncatedResults}`));
+    lines.push(`          ${bits.join("  ·  ")}`);
+  }
   return lines;
 }
 

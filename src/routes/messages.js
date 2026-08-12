@@ -4,11 +4,15 @@ import { pipeWebResponse, readJson, sendError, sendJson } from "../util/http.js"
 
 function tokenFields(result, meta) {
   const usage = meta?.usage || result.usage || {};
+  const p = result.preprocess || {};
   return {
     promptTokens: usage.prompt_tokens || usage.input_tokens || 0,
     completionTokens: usage.completion_tokens || usage.output_tokens || 0,
     maxContext: result.maxContext || meta?.maxContext || 0,
     contextPct: meta?.contextUsagePercentage ?? result.contextUsagePercentage ?? null,
+    savedTokens: p.savedTokens || 0,
+    compacted: Boolean(p.compacted),
+    truncatedResults: p.truncatedResults || 0,
   };
 }
 

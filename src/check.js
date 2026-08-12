@@ -7,6 +7,9 @@ import { STATIC_MODELS, formatContext, getModelContextLength } from "./kiro/cons
 import { listToolIds } from "./cli-tools/index.js";
 import { parseKeysText, socialRefreshToken } from "./store/accounts.js";
 import { resolveUpstreamModel, toClaudeCodeModelId } from "./kiro/modelAlias.js";
+import { tokenSaverPreprocess } from "./middleware/tokenSaver.js";
+import { contextCompactMaybe } from "./middleware/contextCompact.js";
+import { asciiLogoLines } from "./util/ui.js";
 import {
   estimateAnthropicInputTokens,
   finalizeUsage,
@@ -115,5 +118,98 @@ assert.equal(fromContext.completion_tokens, 10);
 const claudeU = toClaudeUsage(fromContext);
 assert.equal(claudeU.input_tokens, 20000);
 assert.equal(claudeU.output_tokens, 10);
+
+// --- v0.2: short ASCII logo ---
+const logo = asciiLogoLines("0.2.0");
+assert.ok(logo.length <= 12, `logo should be short, got ${logo.length} lines`);
+assert.ok(logo.some((l) => l.includes(",--,") || l.includes("kirouter")));
+
+// --- v0.2: token saver truncates large tool_result ---
+const big = "x".repeat(20_000);
+const saver = tokenSaverPreprocess(
+  {
+    model: "claude-sonnet-4.5",
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "tool_result", tool_use_id: "t1", content: big }],
+      },
+    ],
+  },
+  "claude",
+  { enabled: true, maxToolResultChars: 6000 }
+);
+const tr = saver.body.messages[0].content[0].content;
+assert.ok(tr.length < big.length);
+assert.ok(tr.includes("kirouter truncated"));
+assert.ok(saver.stats.truncatedResults >= 1);
+assert.ok(saver.stats.savedTokensEst > 0);
+
+const saverOff = tokenSaverPreprocess(
+  { messages: [{ role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: big }] }] },
+  "claude",
+  { enabled: false, maxToolResultChars: 6000 }
+);
+assert.equal(saverOff.body.messages[0].content[0].content.length, big.length);
+
+// OpenAI tool role
+const oaiSaver = tokenSaverPreprocess(
+  {
+    messages: [
+      { role: "system", content: "sys" },
+      { role: "tool", tool_call_id: "c1", content: "y".repeat(12_000) },
+    ],
+  },
+  "openai",
+  { enabled: true, maxToolResultChars: 4000 }
+);
+assert.ok(oaiSaver.body.messages[1].content.length < 12_000);
+assert.ok(oaiSaver.stats.truncatedResults >= 1);
+
+// --- v0.2: context compact over threshold + preserve tool pairs ---
+const pad = "p".repeat(9000); // ~2250 tokens each
+const history = [];
+for (let i = 0; i < 8; i++) {
+  history.push({ role: "user", content: [{ type: "text", text: `turn ${i} ${pad}` }] });
+  history.push({
+    role: "assistant",
+    content: [{ type: "text", text: `reply ${i}` }],
+  });
+}
+// tool pair near the end that would be split if we naively keep last 3 msgs
+history.push({
+  role: "assistant",
+  content: [{ type: "tool_use", id: "tool_keep", name: "read", input: { path: "a" } }],
+});
+history.push({
+  role: "user",
+  content: [{ type: "tool_result", tool_use_id: "tool_keep", content: "ok data" }],
+});
+history.push({ role: "user", content: [{ type: "text", text: "continue" }] });
+
+const compact = contextCompactMaybe(
+  { model: "claude-sonnet-4.5", messages: history },
+  "claude",
+  { enabled: true, thresholdPct: 1, keepRecentMessages: 3 }
+);
+assert.equal(compact.stats.compacted, true);
+assert.ok(compact.stats.droppedMessages > 0);
+const compacted = compact.body.messages;
+assert.ok(
+  String(JSON.stringify(compacted[0])).includes("kirouter compact") ||
+    String(JSON.stringify(compacted[0]?.content)).includes("kirouter compact")
+);
+// tool_use must still be present alongside tool_result
+const ids = JSON.stringify(compacted);
+assert.ok(ids.includes("tool_keep"));
+assert.ok(ids.includes("tool_use"));
+assert.ok(ids.includes("tool_result"));
+
+const noCompact = contextCompactMaybe(
+  { model: "claude-sonnet-4.5", messages: [{ role: "user", content: "hi" }] },
+  "claude",
+  { enabled: true, thresholdPct: 70, keepRecentMessages: 12 }
+);
+assert.equal(noCompact.stats.compacted, false);
 
 console.log("check ok");

@@ -97,37 +97,22 @@ export function printBox(lines, { title = "", width = 56, indent = "  ", color =
 }
 
 /**
- * Hardcoded ASCII brand mark (rocket) + wordmark.
+ * Hardcoded ASCII brand mark (compact) + wordmark.
  */
 export function asciiLogoLines(version) {
   const ver = version ? `v${version}` : "";
   const art = [
-    "            /A\\",
-    "           /*I=\\",
-    "          /**I==\\",
-    "         /*^*I===\\",
-    "        /*^**I====\\",
-    "       /*^***I=^^==\\",
-    "      /*^^^^^I^==^==\\",
-    "     /*^^****I^======\\",
-    "    /*^*^****I^=======\\",
-    "   /*^**^****I^========\\",
-    "    \\***^****I^=======/",
-    "     \\**^****I=^==^==/",
-    "      \\*^****I==^^==/",
-    "       \\^****I=====/",
-    "        \\****I====/",
-    "         \\***I===/",
-    "          \\**I==/",
-    "           \\*I=/",
-    "             V",
+    "           ,--,",
+    "     _ ___/ /\\|",
+    " ,;'( )__, )  ~",
+    "//  //   '--;",
+    "'   \\     | ^",
+    "     ^    ^",
   ];
   const lines = art.map((line) => c.cyan(line));
   lines.push("");
-  lines.push(
-    "        " + c.bold("kirouter") + (ver ? c.dim(`  ${ver}`) : "")
-  );
-  lines.push("        " + c.dim("Kiro proxy CLI"));
+  lines.push("     " + c.bold("kirouter") + (ver ? c.dim(`  ${ver}`) : ""));
+  lines.push("     " + c.dim("Kiro proxy CLI"));
   return lines;
 }
 

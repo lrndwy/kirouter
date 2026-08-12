@@ -156,7 +156,7 @@ export class LiveDashboard {
       ...this.#activityBoxLines(rightW),
     ];
 
-    // Vertically center the right column against the rocket
+    // Vertically center the right column against the logo
     const padTop = Math.max(0, Math.floor((logo.length - right.length) / 2));
     const rightPadded = [...Array(padTop).fill(""), ...right];
     const rows = Math.max(logo.length, rightPadded.length);
@@ -203,6 +203,12 @@ export class LiveDashboard {
       const out = e.completionTokens || 0;
       const ctx = e.maxContext ? formatContext(e.maxContext) : "—";
       body.push(` ${c.dim("tok")}   ${c.cyan("in " + inn)} · ${c.green("out " + out)} · ctx ${ctx}`);
+      if (e.savedTokens || e.compacted) {
+        const bits = [];
+        if (e.savedTokens) bits.push(c.green(`saved ~${e.savedTokens}`));
+        if (e.compacted) bits.push(c.yellow("compact"));
+        body.push(` ${c.dim("save")}  ${bits.join(" · ")}`);
+      }
       body.push(` ${c.dim("press")} ${c.cyan(c.bold("L"))} ${c.dim("for full log")}`);
     }
 

@@ -1,6 +1,6 @@
 {
   "name": "@lrnd/kirouter",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Minimal Kiro-only OpenAI/Claude-compatible local proxy CLI",
   "type": "module",
   "bin": {
@@ -17,7 +17,7 @@
   },
   "scripts": {
     "start": "node bin/kirouter.js start",
-    "check": "node --check bin/kirouter.js && node --check src/cli.js && node --check src/server.js && node --check src/tui/menu.js && node --check src/tui/live.js && node --check src/tui/dashboard.js && node --check src/util/ui.js && node --check src/util/spinner.js && node --check src/util/input.js && node --check src/util/tokens.js && node --check src/kiro/eventStream.js && node --check src/kiro/client.js && node --check src/kiro/usage.js && node --check src/store/stats.js && node src/check.js",
+    "check": "node --check bin/kirouter.js && node --check src/cli.js && node --check src/server.js && node --check src/tui/menu.js && node --check src/tui/live.js && node --check src/tui/dashboard.js && node --check src/util/ui.js && node --check src/util/spinner.js && node --check src/util/input.js && node --check src/util/tokens.js && node --check src/middleware/tokenSaver.js && node --check src/middleware/contextCompact.js && node --check src/middleware/preprocess.js && node --check src/kiro/eventStream.js && node --check src/kiro/client.js && node --check src/kiro/usage.js && node --check src/store/stats.js && node src/check.js",
     "prepublishOnly": "npm run check",
     "pack:dry": "npm pack --dry-run"
   },
